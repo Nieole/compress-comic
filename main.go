@@ -11,11 +11,40 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
+
+// 进度信息结构
+type Progress struct {
+	totalChapters  int
+	processedCount int
+	failedCount    int
+	mu             sync.Mutex
+	startTime      time.Time
+}
+
+func (p *Progress) increment(success bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.processedCount++
+	if !success {
+		p.failedCount++
+	}
+}
+
+func (p *Progress) print() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	elapsed := time.Since(p.startTime)
+	fmt.Printf("\r处理进度: %d/%d 完成 (失败: %d) - 耗时: %v",
+		p.processedCount, p.totalChapters, p.failedCount, elapsed.Round(time.Second))
+}
 
 func main() {
 	// 定义命令行参数
 	var rootDir string
+	var workerCount int
 	pwd, err := os.Getwd()
 	if err != nil {
 		log.Fatal("获取当前工作目录失败:", err)
@@ -23,6 +52,7 @@ func main() {
 	defaultDir := filepath.Join(pwd, "comic")
 	defaultDir = "C:\\Users\\saber\\Downloads\\处理"
 	flag.StringVar(&rootDir, "dir", defaultDir, "漫画根目录路径 (支持相对路径)")
+	flag.IntVar(&workerCount, "workers", 4, "并发处理的工作线程数")
 	flag.Parse()
 
 	// 处理相对路径
@@ -46,19 +76,17 @@ func main() {
 	// 收集所有章节目录
 	var chapterMap = make(map[string]struct{})
 	var chapterDirs []string
+	var dirCount int
 
-	dirCount := 0
-
+	// 使用更高效的目录遍历
 	err = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			//return err
 			log.Println(err)
+			return filepath.SkipDir
 		}
 
 		if path != rootDir {
-
-			stat, _ := os.Stat(path)
-			if stat.IsDir() {
+			if info.IsDir() {
 				dirCount++
 			}
 
@@ -73,33 +101,53 @@ func main() {
 					chapterMap[chapterDir] = struct{}{}
 					chapterDirs = append(chapterDirs, chapterDir)
 				}
-
 			}
-
 		}
-
-		// 如果是文件夹，并且不是根目录
-		//if info.IsDir() && path != rootDir {
-		//	fmt.Printf("Processing directory: %s\n", path)
-		//	err := processChapter(path)
-		//	if err != nil {
-		//		fmt.Printf("Error processing directory %s: %v\n", path, err)
-		//	}
-		//}
 		return nil
 	})
 
 	if err != nil {
-		fmt.Printf("Error walking the directory: %v\n", err)
+		fmt.Printf("遍历目录时发生错误: %v\n", err)
+		return
 	}
 
+	if len(chapterDirs) == 0 {
+		fmt.Println("未找到需要处理的章节目录")
+		return
+	}
+
+	// 创建进度跟踪器
+	progress := &Progress{
+		totalChapters: len(chapterDirs),
+		startTime:     time.Now(),
+	}
+
+	// 创建工作通道
+	jobs := make(chan string, len(chapterDirs))
+	var wg sync.WaitGroup
+
+	// 启动工作协程
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for chapterDir := range jobs {
+				err := processChapter(chapterDir)
+				progress.increment(err == nil)
+				progress.print()
+			}
+		}()
+	}
+
+	// 分发工作
 	for _, chapterDir := range chapterDirs {
-		err := processChapter(chapterDir)
-		if err != nil {
-			fmt.Printf("Error processing directory %s: %v\n", chapterDir, err)
-		}
+		jobs <- chapterDir
 	}
+	close(jobs)
 
+	// 等待所有工作完成
+	wg.Wait()
+	fmt.Println("\n处理完成!")
 }
 
 // 处理单个章节文件夹
@@ -107,25 +155,23 @@ func processChapter(chapterDir string) error {
 	zipFileName := chapterDir + ".zip"
 
 	// 创建压缩包
-	//err := createZip(chapterDir, zipFileName, flate.BestSpeed)
 	err := createZipWith7Zip(chapterDir, zipFileName)
 	if err != nil {
-		return fmt.Errorf("failed to create zip: %w", err)
+		return fmt.Errorf("压缩失败 %s: %w", chapterDir, err)
 	}
 
 	// 验证压缩包完整性
 	err = testZipWith7Zip(zipFileName)
 	if err != nil {
-		return fmt.Errorf("zip integrity test failed: %w", err)
+		return fmt.Errorf("验证失败 %s: %w", chapterDir, err)
 	}
 
 	// 删除章节文件夹
 	err = os.RemoveAll(chapterDir)
 	if err != nil {
-		return fmt.Errorf("failed to remove original directory: %w", err)
+		return fmt.Errorf("删除原目录失败 %s: %w", chapterDir, err)
 	}
 
-	fmt.Printf("Successfully processed and removed directory: %s\n", chapterDir)
 	return nil
 }
 
