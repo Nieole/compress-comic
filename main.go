@@ -85,7 +85,6 @@ func main() {
 	}
 
 	defaultDir := filepath.Join(pwd, "comic")
-	defaultDir = "C:\\Users\\saber\\Downloads\\处理"
 
 	// 设置默认的工作线程数
 	defaultWorkers := runtime.NumCPU()
