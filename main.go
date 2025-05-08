@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"compress/flate"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -13,13 +14,34 @@ import (
 )
 
 func main() {
-	rootDir := "C:/Users/saber/Downloads/dmzjDownload/comic" // 替换为你的漫画根目录路径
-	//rootDir := "./comic" // 替换为你的漫画根目录路径
-
+	// 定义命令行参数
+	var rootDir string
 	pwd, err := os.Getwd()
-	fmt.Println(pwd)
+	if err != nil {
+		log.Fatal("获取当前工作目录失败:", err)
+	}
+	defaultDir := filepath.Join(pwd, "comic")
+	defaultDir = "C:\\Users\\saber\\Downloads\\处理"
+	flag.StringVar(&rootDir, "dir", defaultDir, "漫画根目录路径 (支持相对路径)")
+	flag.Parse()
 
-	//rootDir = filepath.Join(pwd, rootDir)
+	// 处理相对路径
+	if !filepath.IsAbs(rootDir) {
+		rootDir = filepath.Join(pwd, rootDir)
+	}
+
+	// 规范化路径
+	rootDir = filepath.Clean(rootDir)
+
+	// 检查目录是否存在
+	if _, err := os.Stat(rootDir); os.IsNotExist(err) {
+		log.Printf("目录 %s 不存在，将创建此目录", rootDir)
+		if err := os.MkdirAll(rootDir, 0755); err != nil {
+			log.Fatal("创建目录失败:", err)
+		}
+	}
+
+	fmt.Printf("处理目录: %s\n", rootDir)
 
 	// 收集所有章节目录
 	var chapterMap = make(map[string]struct{})
@@ -41,7 +63,10 @@ func main() {
 			}
 
 			ext := strings.ToUpper(filepath.Ext(path))
-			if ext == ".JPG" || ext == ".JPEG" || ext == ".PNG" {
+			if ext == ".JPG" || ext == ".JPEG" || ext == ".PNG" ||
+				ext == ".WEBP" || ext == ".AVIF" || ext == ".GIF" ||
+				ext == ".BMP" || ext == ".HEIC" || ext == ".HEIF" ||
+				ext == ".TIFF" || ext == ".TIF" {
 				chapterDir := filepath.Dir(path)
 
 				if _, exists := chapterMap[chapterDir]; !exists {
