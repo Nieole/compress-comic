@@ -85,10 +85,8 @@ func main() {
 
 	// 检查目录是否存在
 	if _, err := os.Stat(rootDir); os.IsNotExist(err) {
-		log.Printf("目录 %s 不存在，将创建此目录", rootDir)
-		if err := os.MkdirAll(rootDir, 0755); err != nil {
-			log.Fatal("创建目录失败:", err)
-		}
+		log.Printf("目录 %s 不存在", rootDir)
+		return
 	}
 
 	fmt.Printf("处理目录: %s\n", rootDir)
