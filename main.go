@@ -42,6 +42,35 @@ func (p *Progress) print() {
 		p.processedCount, p.totalChapters, p.failedCount, elapsed.Round(time.Second))
 }
 
+// 检查目录是否只包含图片文件且没有子目录
+func isImageOnlyDir(dirPath string) (bool, error) {
+	hasImages := false
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return false, err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return false, nil // 有子目录，直接返回false
+		}
+
+		if !entry.Type().IsRegular() {
+			continue // 跳过非普通文件
+		}
+
+		ext := strings.ToUpper(filepath.Ext(entry.Name()))
+		if ext == ".JPG" || ext == ".JPEG" || ext == ".PNG" ||
+			ext == ".WEBP" || ext == ".AVIF" || ext == ".GIF" ||
+			ext == ".BMP" || ext == ".HEIC" || ext == ".HEIF" ||
+			ext == ".TIFF" || ext == ".TIF" {
+			hasImages = true
+		}
+	}
+
+	return hasImages, nil
+}
+
 func main() {
 	// 定义命令行参数
 	var (
@@ -56,6 +85,7 @@ func main() {
 	}
 
 	defaultDir := filepath.Join(pwd, "comic")
+	defaultDir = "C:\\Users\\saber\\Downloads\\处理"
 
 	// 设置默认的工作线程数
 	defaultWorkers := runtime.NumCPU()
@@ -92,10 +122,8 @@ func main() {
 	fmt.Printf("处理目录: %s\n", rootDir)
 	fmt.Printf("并发数量: %d\n", workerCount)
 
-	// 收集所有章节目录
-	var chapterMap = make(map[string]struct{})
+	// 收集所有符合条件的目录
 	var chapterDirs []string
-	var dirCount int
 
 	// 使用更高效的目录遍历
 	err = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
@@ -104,22 +132,19 @@ func main() {
 			return filepath.SkipDir
 		}
 
-		if path != rootDir {
-			if info.IsDir() {
-				dirCount++
+		if path == rootDir {
+			return nil
+		}
+
+		if info.IsDir() {
+			isImageDir, err := isImageOnlyDir(path)
+			if err != nil {
+				log.Printf("检查目录失败 %s: %v\n", path, err)
+				return filepath.SkipDir
 			}
 
-			ext := strings.ToUpper(filepath.Ext(path))
-			if ext == ".JPG" || ext == ".JPEG" || ext == ".PNG" ||
-				ext == ".WEBP" || ext == ".AVIF" || ext == ".GIF" ||
-				ext == ".BMP" || ext == ".HEIC" || ext == ".HEIF" ||
-				ext == ".TIFF" || ext == ".TIF" {
-				chapterDir := filepath.Dir(path)
-
-				if _, exists := chapterMap[chapterDir]; !exists {
-					chapterMap[chapterDir] = struct{}{}
-					chapterDirs = append(chapterDirs, chapterDir)
-				}
+			if isImageDir {
+				chapterDirs = append(chapterDirs, path)
 			}
 		}
 		return nil
@@ -134,6 +159,8 @@ func main() {
 		fmt.Println("未找到需要处理的章节目录")
 		return
 	}
+
+	fmt.Printf("找到 %d 个待处理目录\n", len(chapterDirs))
 
 	// 创建进度跟踪器
 	progress := &Progress{
