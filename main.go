@@ -60,6 +60,12 @@ func isImageOnlyDir(dirPath string) (bool, error) {
 		}
 
 		ext := strings.ToUpper(filepath.Ext(entry.Name()))
+
+		// 如果目录中包含压缩包，跳过该目录
+		if ext == ".ZIP" || ext == ".RAR" || ext == ".7Z" {
+			return false, nil
+		}
+
 		if ext == ".JPG" || ext == ".JPEG" || ext == ".PNG" ||
 			ext == ".WEBP" || ext == ".AVIF" || ext == ".GIF" ||
 			ext == ".BMP" || ext == ".HEIC" || ext == ".HEIF" ||
@@ -76,7 +82,7 @@ func main() {
 	var (
 		rootDir     string
 		workerCount int
-		showVersion bool
+		verbose     bool
 	)
 
 	pwd, err := os.Getwd()
@@ -94,14 +100,13 @@ func main() {
 
 	flag.StringVar(&rootDir, "dir", defaultDir, "漫画根目录路径 (支持相对路径)")
 	flag.IntVar(&workerCount, "workers", defaultWorkers, "并发处理的工作线程数")
-	flag.BoolVar(&showVersion, "version", false, "显示版本信息")
+	flag.BoolVar(&verbose, "v", false, "显示详细的压缩过程信息")
 	flag.Parse()
 
 	// 显示版本信息
-	if showVersion {
+	if verbose {
 		fmt.Printf("Go版本: %s\n", runtime.Version())
 		fmt.Printf("操作系统/架构: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-		return
 	}
 
 	// 处理相对路径
@@ -177,7 +182,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for chapterDir := range jobs {
-				err := processChapter(chapterDir)
+				err := processChapter(chapterDir, verbose)
 				progress.increment(err == nil)
 				progress.print()
 			}
@@ -196,17 +201,17 @@ func main() {
 }
 
 // 处理单个章节文件夹
-func processChapter(chapterDir string) error {
+func processChapter(chapterDir string, verbose bool) error {
 	zipFileName := chapterDir + ".zip"
 
 	// 创建压缩包
-	err := createZipWith7Zip(chapterDir, zipFileName)
+	err := createZipWith7Zip(chapterDir, zipFileName, verbose)
 	if err != nil {
 		return fmt.Errorf("压缩失败 %s: %w", chapterDir, err)
 	}
 
 	// 验证压缩包完整性
-	err = testZipWith7Zip(zipFileName)
+	err = testZipWith7Zip(zipFileName, verbose)
 	if err != nil {
 		return fmt.Errorf("验证失败 %s: %w", chapterDir, err)
 	}
@@ -276,12 +281,14 @@ func createZip(sourceDir, zipFileName string, compressionLevel int) error {
 }
 
 // 调用 7-Zip 创建 ZIP 文件
-func createZipWith7Zip(sourceDir, zipFileName string) error {
+func createZipWith7Zip(sourceDir, zipFileName string, verbose bool) error {
 	cmd := exec.Command("7z", "a", "-tzip", "-mx=9", zipFileName, sourceDir)
 
-	// 捕获命令输出
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// 根据verbose标记决定是否显示输出
+	if verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	err := cmd.Run()
 	if err != nil {
@@ -326,12 +333,14 @@ func testZipIntegrity(zipFileName string) error {
 }
 
 // 调用 7-Zip 测试 ZIP 文件完整性
-func testZipWith7Zip(zipFileName string) error {
+func testZipWith7Zip(zipFileName string, verbose bool) error {
 	cmd := exec.Command("7z", "t", zipFileName)
 
-	// 捕获命令输出
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// 根据verbose标记决定是否显示输出
+	if verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	err := cmd.Run()
 	if err != nil {
