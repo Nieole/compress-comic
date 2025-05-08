@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -43,17 +44,36 @@ func (p *Progress) print() {
 
 func main() {
 	// 定义命令行参数
-	var rootDir string
-	var workerCount int
+	var (
+		rootDir     string
+		workerCount int
+		showVersion bool
+	)
+
 	pwd, err := os.Getwd()
 	if err != nil {
 		log.Fatal("获取当前工作目录失败:", err)
 	}
+
 	defaultDir := filepath.Join(pwd, "comic")
-	defaultDir = "C:\\Users\\saber\\Downloads\\处理"
+
+	// 设置默认的工作线程数
+	defaultWorkers := runtime.NumCPU()
+	if defaultWorkers > 8 {
+		defaultWorkers = 8
+	}
+
 	flag.StringVar(&rootDir, "dir", defaultDir, "漫画根目录路径 (支持相对路径)")
-	flag.IntVar(&workerCount, "workers", 4, "并发处理的工作线程数")
+	flag.IntVar(&workerCount, "workers", defaultWorkers, "并发处理的工作线程数")
+	flag.BoolVar(&showVersion, "version", false, "显示版本信息")
 	flag.Parse()
+
+	// 显示版本信息
+	if showVersion {
+		fmt.Printf("Go版本: %s\n", runtime.Version())
+		fmt.Printf("操作系统/架构: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		return
+	}
 
 	// 处理相对路径
 	if !filepath.IsAbs(rootDir) {
@@ -72,6 +92,7 @@ func main() {
 	}
 
 	fmt.Printf("处理目录: %s\n", rootDir)
+	fmt.Printf("并发数量: %d\n", workerCount)
 
 	// 收集所有章节目录
 	var chapterMap = make(map[string]struct{})
