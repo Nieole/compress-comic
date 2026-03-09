@@ -83,6 +83,8 @@ func main() {
 		rootDir     string
 		workerCount int
 		verbose     bool
+		format      string
+		rrPercent   int
 	)
 
 	pwd, err := os.Getwd()
@@ -101,7 +103,14 @@ func main() {
 	flag.StringVar(&rootDir, "dir", defaultDir, "漫画根目录路径 (支持相对路径)")
 	flag.IntVar(&workerCount, "workers", defaultWorkers, "并发处理的工作线程数")
 	flag.BoolVar(&verbose, "v", false, "显示详细的压缩过程信息")
+	flag.StringVar(&format, "format", "zip", "输出格式 (zip, 7z, rar)")
+	flag.IntVar(&rrPercent, "rr", 10, "RAR 恢复记录百分比 (仅对 rar 格式有效, 默认 10)")
 	flag.Parse()
+
+	format = strings.ToLower(format)
+	if format != "zip" && format != "7z" && format != "rar" {
+		log.Fatal("不支持的格式: ", format)
+	}
 
 	// 显示版本信息
 	if verbose {
@@ -182,7 +191,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for chapterDir := range jobs {
-				err := processChapter(chapterDir, verbose)
+				err := processChapter(chapterDir, format, rrPercent, verbose)
 				progress.increment(err == nil)
 				progress.print()
 			}
@@ -201,17 +210,18 @@ func main() {
 }
 
 // 处理单个章节文件夹
-func processChapter(chapterDir string, verbose bool) error {
-	zipFileName := chapterDir + ".zip"
+func processChapter(chapterDir, format string, rrPercent int, verbose bool) error {
+	ext := "." + format
+	zipFileName := chapterDir + ext
 
 	// 创建压缩包
-	err := createZipWith7Zip(chapterDir, zipFileName, verbose)
+	err := createArchive(chapterDir, zipFileName, format, rrPercent, verbose)
 	if err != nil {
 		return fmt.Errorf("压缩失败 %s: %w", chapterDir, err)
 	}
 
 	// 验证压缩包完整性
-	err = testZipWith7Zip(zipFileName, verbose)
+	err = verifyArchive(zipFileName, format, verbose)
 	if err != nil {
 		return fmt.Errorf("验证失败 %s: %w", chapterDir, err)
 	}
@@ -223,6 +233,64 @@ func processChapter(chapterDir string, verbose bool) error {
 	}
 
 	return nil
+}
+
+// 统一压缩函数，支持目录平铺
+func createArchive(sourceDir, archiveName, format string, rrPercent int, verbose bool) error {
+	var cmd *exec.Cmd
+
+	// 获取绝对路径，因为我们会切换工作目录
+	absArchiveName, err := filepath.Abs(archiveName)
+	if err != nil {
+		return err
+	}
+
+	switch format {
+	case "7z", "zip":
+		tFlag := "-tzip"
+		if format == "7z" {
+			tFlag = "-t7z"
+		}
+		// 使用 . 表示当前目录，并设置 cmd.Dir 为 sourceDir 来实现平铺
+		cmd = exec.Command("7z", "a", tFlag, "-mx=9", absArchiveName, ".")
+	case "rar":
+		// -rr[N]p: N% 恢复记录
+		rrArg := fmt.Sprintf("-rr%dp", rrPercent)
+		// -ep1: 排除基准目录（实现平铺的关键）
+		// -m5: 最高压缩率
+		cmd = exec.Command("rar", "a", "-m5", rrArg, "-ep1", absArchiveName, ".")
+	default:
+		return fmt.Errorf("不支持的格式: %s", format)
+	}
+
+	cmd.Dir = sourceDir
+
+	if verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+
+	err = cmd.Run()
+	if err != nil {
+		if format == "rar" {
+			return fmt.Errorf("rar 命令执行失败，请确保已安装 WinRAR 且 rar.exe 在 PATH 中: %w", err)
+		}
+		return fmt.Errorf("压缩失败: %w", err)
+	}
+	return nil
+}
+
+// 统一验证函数
+func verifyArchive(archiveName, format string, verbose bool) error {
+	// 7-Zip 可以验证 zip, 7z 和 rar 格式
+	cmd := exec.Command("7z", "t", archiveName)
+
+	if verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+
+	return cmd.Run()
 }
 
 // 创建 ZIP 文件
