@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"compress/flate"
 	"flag"
 	"fmt"
@@ -85,6 +86,7 @@ func main() {
 		verbose     bool
 		format      string
 		rrPercent   int
+		rarPath     string
 	)
 
 	pwd, err := os.Getwd()
@@ -105,6 +107,7 @@ func main() {
 	flag.BoolVar(&verbose, "v", false, "显示详细的压缩过程信息")
 	flag.StringVar(&format, "format", "zip", "输出格式 (zip, 7z, rar)")
 	flag.IntVar(&rrPercent, "rr", 10, "RAR 恢复记录百分比 (仅对 rar 格式有效, 默认 10)")
+	flag.StringVar(&rarPath, "rar-path", "", "手动指定 rar.exe 的路径 (如果不在环境变量中)")
 	flag.Parse()
 
 	format = strings.ToLower(format)
@@ -191,7 +194,10 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for chapterDir := range jobs {
-				err := processChapter(chapterDir, format, rrPercent, verbose)
+				err := processChapter(chapterDir, format, rrPercent, rarPath, verbose)
+				if err != nil {
+					log.Printf("\n[错误] 处理章节 %s 失败: %v\n", filepath.Base(chapterDir), err)
+				}
 				progress.increment(err == nil)
 				progress.print()
 			}
@@ -210,12 +216,12 @@ func main() {
 }
 
 // 处理单个章节文件夹
-func processChapter(chapterDir, format string, rrPercent int, verbose bool) error {
+func processChapter(chapterDir, format string, rrPercent int, userRarPath string, verbose bool) error {
 	ext := "." + format
 	zipFileName := chapterDir + ext
 
 	// 创建压缩包
-	err := createArchive(chapterDir, zipFileName, format, rrPercent, verbose)
+	err := createArchive(chapterDir, zipFileName, format, rrPercent, userRarPath, verbose)
 	if err != nil {
 		return fmt.Errorf("压缩失败 %s: %w", chapterDir, err)
 	}
@@ -236,7 +242,7 @@ func processChapter(chapterDir, format string, rrPercent int, verbose bool) erro
 }
 
 // 统一压缩函数，支持目录平铺
-func createArchive(sourceDir, archiveName, format string, rrPercent int, verbose bool) error {
+func createArchive(sourceDir, archiveName, format string, rrPercent int, userRarPath string, verbose bool) error {
 	var cmd *exec.Cmd
 
 	// 获取绝对路径，因为我们会切换工作目录
@@ -254,28 +260,34 @@ func createArchive(sourceDir, archiveName, format string, rrPercent int, verbose
 		// 使用 . 表示当前目录，并设置 cmd.Dir 为 sourceDir 来实现平铺
 		cmd = exec.Command("7z", "a", tFlag, "-mx=9", absArchiveName, ".")
 	case "rar":
+		// 解析 rar 路径
+		resolvedRarPath := resolveRarPath(userRarPath)
 		// -rr[N]p: N% 恢复记录
 		rrArg := fmt.Sprintf("-rr%dp", rrPercent)
 		// -ep1: 排除基准目录（实现平铺的关键）
 		// -m5: 最高压缩率
-		cmd = exec.Command("rar", "a", "-m5", rrArg, "-ep1", absArchiveName, ".")
+		cmd = exec.Command(resolvedRarPath, "a", "-m5", rrArg, "-ep1", absArchiveName, ".")
 	default:
 		return fmt.Errorf("不支持的格式: %s", format)
 	}
 
 	cmd.Dir = sourceDir
 
+	var stderr bytes.Buffer
 	if verbose {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stderr = &stderr
 	}
 
 	err = cmd.Run()
 	if err != nil {
+		errorMsg := stderr.String()
 		if format == "rar" {
-			return fmt.Errorf("rar 命令执行失败，请确保已安装 WinRAR 且 rar.exe 在 PATH 中: %w", err)
+			return fmt.Errorf("rar 命令执行失败 (%v). 错误信息: %s", err, errorMsg)
 		}
-		return fmt.Errorf("压缩失败: %w", err)
+		return fmt.Errorf("压缩失败 (%v). 错误信息: %s", err, errorMsg)
 	}
 	return nil
 }
@@ -291,6 +303,34 @@ func verifyArchive(archiveName, format string, verbose bool) error {
 	}
 
 	return cmd.Run()
+}
+
+// 尝试解析 rar 可执行文件的路径
+func resolveRarPath(userPath string) string {
+	// 1. 如果用户指定了路径，优先使用
+	if userPath != "" {
+		return userPath
+	}
+
+	// 2. 尝试在系统 PATH 中查找
+	if path, err := exec.LookPath("rar"); err == nil {
+		return path
+	}
+
+	// 3. 尝试 Windows 常见的默认安装路径
+	commonPaths := []string{
+		`C:\Program Files\WinRAR\rar.exe`,
+		`C:\Program Files (x86)\WinRAR\rar.exe`,
+	}
+
+	for _, p := range commonPaths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	// 4. 最后回退到 "rar"，让 exec.Command 报错（如果依然找不到）
+	return "rar"
 }
 
 // 创建 ZIP 文件
